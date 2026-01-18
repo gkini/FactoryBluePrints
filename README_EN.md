@@ -1,7 +1,7 @@
 ![](https://img.shields.io/github/languages/code-size/DSPBluePrints/FactoryBluePrints?style=for-the-badge)
 ![](https://img.shields.io/github/last-commit/DSPBluePrints/FactoryBluePrints?style=for-the-badge)
 
-# Dyson Sphere Program Factory Blueprint
+# Dyson Sphere Program Factory Blueprint 
 
 [简体中文](./README.md) | **English**
 
