@@ -326,6 +326,17 @@ def contains_chinese(text):
     return bool(re.search(r'[\u4e00-\u9fff]', text))
 
 
+def needs_translation(text):
+    """Check if text contains Chinese characters or Chinese punctuation that needs normalization."""
+    # Chinese characters
+    if re.search(r'[\u4e00-\u9fff]', text):
+        return True
+    # Chinese/fullwidth punctuation
+    if re.search(r'[（）【】「」『』、，。：；""''！？　＆＝＋]', text):
+        return True
+    return False
+
+
 def extract_chinese_segments(text):
     """Extract Chinese character sequences from text with their positions."""
     return [(m.group(), m.start(), m.end()) for m in re.finditer(r'[\u4e00-\u9fff]+', text)]
@@ -413,19 +424,62 @@ def translate_remaining_chinese(text, translator):
     return result
 
 
+# Known file extensions to preserve
+KNOWN_EXTENSIONS = {'.txt', '.blueprint', '.md', '.json', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.pdf'}
+
+
+def normalize_punctuation(text):
+    """Convert Chinese/fullwidth punctuation to ASCII equivalents."""
+    replacements = {
+        '（': '(',
+        '）': ')',
+        '【': '[',
+        '】': ']',
+        '「': '[',
+        '」': ']',
+        '『': '[',
+        '』': ']',
+        '、': ',',
+        '，': ',',
+        '。': '.',
+        '：': '-',
+        '；': ';',
+        '"': '"',
+        '"': '"',
+        ''': "'",
+        ''': "'",
+        '！': '!',
+        '？': '?',
+        '　': ' ',  # fullwidth space
+        '＆': '&',
+        '＝': '=',
+        '＋': '+',
+    }
+    for chinese, ascii_char in replacements.items():
+        text = text.replace(chinese, ascii_char)
+    return text
+
+
 def translate_name(name, translator):
     """
     Translate Chinese parts of a filename/dirname to English.
     Uses DSP dictionary for game terms, Argos for everything else.
     Preserves non-Chinese parts and file extensions.
     """
+    # First normalize Chinese punctuation
+    name = normalize_punctuation(name)
+
     if not contains_chinese(name):
         return name
 
-    # Separate extension for files
-    path = Path(name)
-    stem = path.stem if path.suffix else name
-    suffix = path.suffix if path.suffix else ""
+    # Only separate known file extensions, not arbitrary dots
+    stem = name
+    suffix = ""
+    for ext in KNOWN_EXTENSIONS:
+        if name.lower().endswith(ext):
+            stem = name[:-len(ext)]
+            suffix = name[-len(ext):]
+            break
 
     # Translate using dictionary + Argos fallback
     translated_stem = translate_with_dictionary(stem, translator)
@@ -483,14 +537,14 @@ def translate_directory(root_dir, translator, dry_run=False):
 
         # Process files first
         for filename in filenames:
-            if contains_chinese(filename):
+            if needs_translation(filename):
                 items_to_process.append(('file', dirpath / filename))
 
         # Then directories
         for dirname in dirnames:
             if dirname in ('.git', '.venv'):
                 continue
-            if contains_chinese(dirname):
+            if needs_translation(dirname):
                 items_to_process.append(('dir', dirpath / dirname))
 
     if not items_to_process:
