@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python translate_names.py:*)",
+      "Bash(python3:*)",
+      "Bash(pip3 install:*)",
+      "Bash(sudo apt-get update:*)",
+      "Bash(sudo apt-get install:*)",
+      "Bash(.venv/bin/python:*)",
+      "WebFetch(domain:dsp-wiki.com)"
+    ]
+  }
+}
