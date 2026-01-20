@@ -10,6 +10,7 @@ import sys
 import os
 import json
 import argparse
+import re
 from pathlib import Path
 
 # Add dspbptk to the path
@@ -17,6 +18,94 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'dspbptk'))
 
 from Blueprint import Blueprint
 from BlueprintData import BlueprintData
+
+# Import translation functions from translate_names.py
+from translate_names import (
+    setup_translation,
+    translate_with_dictionary,
+    contains_chinese,
+    normalize_punctuation,
+    DSP_DICTIONARY
+)
+
+
+def translate_text(text, translator):
+    """
+    Translate Chinese text in a blueprint description to English.
+    Uses the DSP dictionary for game terms, Argos for everything else.
+    """
+    if not text or not contains_chinese(text):
+        return text
+
+    # First normalize Chinese punctuation
+    text = normalize_punctuation(text)
+
+    if not contains_chinese(text):
+        return text
+
+    # Translate using dictionary + Argos fallback
+    translated = translate_with_dictionary(text, translator)
+
+    # Clean up the result
+    translated = re.sub(r'-+', '-', translated)  # Remove multiple dashes
+    translated = translated.strip('-')  # Remove leading/trailing dashes
+
+    return translated
+
+
+def translate_blueprint_file(input_file, output_file=None, ignore_corrupt=False, dry_run=False):
+    """
+    Translate Chinese text in a blueprint's short_desc and long_desc to English.
+
+    Args:
+        input_file: Path to input blueprint file
+        output_file: Path to output blueprint file (None = modify in place)
+        ignore_corrupt: Skip hash validation
+        dry_run: Show what would be changed without writing
+    """
+    if output_file is None:
+        output_file = input_file
+
+    # Setup translation
+    print("Setting up translation...")
+    translator = setup_translation()
+    print("Translation ready.\n")
+
+    # Read the blueprint
+    print(f"Reading blueprint from: {input_file}")
+    bp = Blueprint.read_from_file(input_file, validate_hash=not ignore_corrupt)
+
+    # Get current descriptions
+    old_short = bp.short_desc
+    old_long = bp.long_desc
+
+    print(f"\nOriginal short description: {old_short}")
+    print(f"Original long description:\n{old_long}\n")
+
+    # Translate
+    new_short = translate_text(old_short, translator)
+    new_long = translate_text(old_long, translator)
+
+    print(f"Translated short description: {new_short}")
+    print(f"Translated long description:\n{new_long}\n")
+
+    if dry_run:
+        print("[DRY RUN] No changes written.")
+        return
+
+    # Check if anything changed
+    if old_short == new_short and old_long == new_long:
+        print("No Chinese text found to translate.")
+        return
+
+    # Update descriptions
+    bp.short_desc = new_short
+    bp.long_desc = new_long
+
+    # Write the modified blueprint
+    print(f"Writing modified blueprint to: {output_file}")
+    bp.write_to_file(output_file)
+    print("Done!")
 
 
 def modify_blueprint_data(bp_data, modifications):
@@ -229,6 +318,15 @@ def main():
     dump_parser.add_argument('input', help='Input blueprint file')
     dump_parser.add_argument('--ignore-corrupt', action='store_true',
                             help='Skip hash validation')
+
+    # Translate command
+    translate_parser = subparsers.add_parser('translate', help='Translate Chinese text in blueprint')
+    translate_parser.add_argument('input', help='Input blueprint file')
+    translate_parser.add_argument('--output', '-o', help='Output blueprint file (default: modify in place)')
+    translate_parser.add_argument('--ignore-corrupt', action='store_true',
+                                  help='Skip hash validation')
+    translate_parser.add_argument('--dry-run', '-n', action='store_true',
+                                  help='Show what would be changed without writing')
     
     args = parser.parse_args()
     
@@ -272,7 +370,15 @@ def main():
                 args.input,
                 ignore_corrupt=args.ignore_corrupt
             )
-        
+
+        elif args.command == 'translate':
+            translate_blueprint_file(
+                args.input,
+                output_file=args.output,
+                ignore_corrupt=args.ignore_corrupt,
+                dry_run=args.dry_run
+            )
+
         return 0
     
     except Exception as e:
