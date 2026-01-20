@@ -53,7 +53,7 @@ def translate_text(text, translator):
     return translated
 
 
-def translate_blueprint_file(input_file, output_file=None, ignore_corrupt=False, dry_run=False):
+def translate_blueprint_file(input_file, output_file=None, ignore_corrupt=False, dry_run=False, translator=None, quiet=False):
     """
     Translate Chinese text in a blueprint's short_desc and long_desc to English.
 
@@ -62,50 +62,149 @@ def translate_blueprint_file(input_file, output_file=None, ignore_corrupt=False,
         output_file: Path to output blueprint file (None = modify in place)
         ignore_corrupt: Skip hash validation
         dry_run: Show what would be changed without writing
+        translator: Pre-initialized translator (optional, for batch processing)
+        quiet: Suppress verbose output
     """
     if output_file is None:
         output_file = input_file
 
-    # Setup translation
-    print("Setting up translation...")
-    translator = setup_translation()
-    print("Translation ready.\n")
+    # Setup translation if not provided
+    if translator is None:
+        if not quiet:
+            print("Setting up translation...")
+        translator = setup_translation()
+        if not quiet:
+            print("Translation ready.\n")
 
     # Read the blueprint
-    print(f"Reading blueprint from: {input_file}")
-    bp = Blueprint.read_from_file(input_file, validate_hash=not ignore_corrupt)
+    if not quiet:
+        print(f"Reading blueprint from: {input_file}")
+
+    try:
+        bp = Blueprint.read_from_file(input_file, validate_hash=not ignore_corrupt)
+    except Exception as e:
+        if not quiet:
+            print(f"Error reading blueprint: {e}")
+        return False
 
     # Get current descriptions
     old_short = bp.short_desc
     old_long = bp.long_desc
 
-    print(f"\nOriginal short description: {old_short}")
-    print(f"Original long description:\n{old_long}\n")
+    if not quiet:
+        print(f"\nOriginal short description: {old_short}")
+        print(f"Original long description:\n{old_long}\n")
 
     # Translate
     new_short = translate_text(old_short, translator)
     new_long = translate_text(old_long, translator)
 
-    print(f"Translated short description: {new_short}")
-    print(f"Translated long description:\n{new_long}\n")
+    if not quiet:
+        print(f"Translated short description: {new_short}")
+        print(f"Translated long description:\n{new_long}\n")
 
     if dry_run:
-        print("[DRY RUN] No changes written.")
-        return
+        if not quiet:
+            print("[DRY RUN] No changes written.")
+        return old_short != new_short or old_long != new_long
 
     # Check if anything changed
     if old_short == new_short and old_long == new_long:
-        print("No Chinese text found to translate.")
-        return
+        if not quiet:
+            print("No Chinese text found to translate.")
+        return False
 
     # Update descriptions
     bp.short_desc = new_short
     bp.long_desc = new_long
 
     # Write the modified blueprint
-    print(f"Writing modified blueprint to: {output_file}")
+    if not quiet:
+        print(f"Writing modified blueprint to: {output_file}")
     bp.write_to_file(output_file)
-    print("Done!")
+    if not quiet:
+        print("Done!")
+    return True
+
+
+def translate_all_blueprints(directory, ignore_corrupt=False, dry_run=False):
+    """
+    Translate all blueprint files in a directory recursively.
+
+    Args:
+        directory: Root directory to search
+        ignore_corrupt: Skip hash validation
+        dry_run: Show what would be changed without writing
+    """
+    import glob
+
+    directory = Path(directory).resolve()
+
+    # Find all .txt files (blueprints)
+    pattern = str(directory / "**" / "*.txt")
+    files = glob.glob(pattern, recursive=True)
+
+    # Filter out non-blueprint directories
+    files = [f for f in files if '.git' not in f and '.venv' not in f]
+
+    total = len(files)
+    print(f"Found {total} blueprint files to process.")
+    print(f"Mode: {'DRY RUN' if dry_run else 'LIVE'}\n")
+
+    # Setup translation once
+    print("Setting up translation...")
+    translator = setup_translation()
+    print("Translation ready.\n")
+
+    translated_count = 0
+    error_count = 0
+    skipped_count = 0
+
+    for i, filepath in enumerate(files, 1):
+        filename = Path(filepath).name
+
+        # Check if file contains Chinese that needs translation
+        try:
+            bp = Blueprint.read_from_file(filepath, validate_hash=not ignore_corrupt)
+            short_desc = bp.short_desc
+            long_desc = bp.long_desc
+
+            # Check if translation is needed
+            if not contains_chinese(short_desc) and not contains_chinese(long_desc):
+                # Also check for Chinese punctuation
+                from translate_names import needs_translation
+                if not needs_translation(short_desc) and not needs_translation(long_desc):
+                    skipped_count += 1
+                    if i % 500 == 0:
+                        print(f"[{i}/{total}] Progress... ({translated_count} translated, {skipped_count} skipped, {error_count} errors)")
+                    continue
+
+            # Translate
+            result = translate_blueprint_file(
+                filepath,
+                ignore_corrupt=ignore_corrupt,
+                dry_run=dry_run,
+                translator=translator,
+                quiet=True
+            )
+
+            if result:
+                translated_count += 1
+                print(f"[{i}/{total}] Translated: {filename}")
+            else:
+                skipped_count += 1
+
+        except Exception as e:
+            error_count += 1
+            print(f"[{i}/{total}] Error processing {filename}: {e}")
+
+        # Progress update every 500 files
+        if i % 500 == 0:
+            print(f"[{i}/{total}] Progress... ({translated_count} translated, {skipped_count} skipped, {error_count} errors)")
+
+    print(f"\n{'Would translate' if dry_run else 'Translated'} {translated_count} files.")
+    print(f"Skipped {skipped_count} files (no Chinese text).")
+    print(f"Errors: {error_count} files.")
 
 
 def modify_blueprint_data(bp_data, modifications):
@@ -327,6 +426,14 @@ def main():
                                   help='Skip hash validation')
     translate_parser.add_argument('--dry-run', '-n', action='store_true',
                                   help='Show what would be changed without writing')
+
+    # Translate-all command
+    translate_all_parser = subparsers.add_parser('translate-all', help='Translate all blueprints in directory')
+    translate_all_parser.add_argument('directory', nargs='?', default='.', help='Directory to process (default: current)')
+    translate_all_parser.add_argument('--ignore-corrupt', action='store_true',
+                                      help='Skip hash validation')
+    translate_all_parser.add_argument('--dry-run', '-n', action='store_true',
+                                      help='Show what would be changed without writing')
     
     args = parser.parse_args()
     
@@ -375,6 +482,13 @@ def main():
             translate_blueprint_file(
                 args.input,
                 output_file=args.output,
+                ignore_corrupt=args.ignore_corrupt,
+                dry_run=args.dry_run
+            )
+
+        elif args.command == 'translate-all':
+            translate_all_blueprints(
+                args.directory,
                 ignore_corrupt=args.ignore_corrupt,
                 dry_run=args.dry_run
             )
